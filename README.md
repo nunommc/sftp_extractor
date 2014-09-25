@@ -88,8 +88,8 @@ production:
   retry_on_error:
     mail_config:
       to:
-        - dimitrios@homeservealliance.com
-        - guy.boertje@homeservealliance.com
+        - admin@example.com
+        - tech-admin@example.com
       subject: "Extraction from SFTP failed (CUSTOMERS LIST)"
       body: "Execution Log:"
 ```
