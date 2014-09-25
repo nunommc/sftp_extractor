@@ -26,7 +26,7 @@ module SftpExtractor
       # TODO: substituir por retry (pckg bin/utils)
       max_retries = @options[:retry_on_error]['max_times'] || 0
 
-      process = Proc.new do |sftp, root, entry, pattern|
+      process_entry = Proc.new do |sftp, root, entry, pattern|
         if entry
           process_file(sftp, root, entry.name)
           @patterns_processed << pattern
@@ -40,33 +40,28 @@ module SftpExtractor
 
         @logger.info { "Getting Files from SFTP server @ #{@options[:credentials]['server']}" }
 
+        res = Net::SFTP.start( *sftp_credentials ){ |sftp|
 
-        # # timeout no upload # http://www.rafaelbiriba.com/2010/09/24/problema-no-net-sftp-timeout-para-o-upload.html
+          (@options[:folder]['in']['patterns'] - @patterns_processed).each{ |pattern|
+            begin
 
-        res = Net::SFTP.start(@options[:credentials]['server'], @options[:credentials]['user'], sftp_connect_options){ |sftp|
+              if @extraction_full_mode
+                get_files_ordered_by_date(sftp, pattern).each{ |entry|
+                  process_entry[ sftp, root, entry, pattern ]
+                }
+              else
+                entry = get_files_ordered_by_date(sftp, pattern).last
+                process_entry[ sftp, root, entry, pattern ]
+              end
 
-            (@options[:folder]['in']['patterns'] - @patterns_processed).each{ |pattern|
-                begin
+            rescue
+              error_found = true
+              error_output << "[#{Time.now.strftime('%H:%M:%S')}] Failed to get file(#{retry_idx+1}): #{$!.message}"
+              @logger.warn { "Failed to get file(#{retry_idx+1}). #{$!.message}. Skipping this pattern..." }
+              next
 
-                  if @extraction_full_mode
-                    sftp.dir.glob( root, pattern +"*" ).sort_by{|f| f.attributes.mtime}.each{|entry|
-                      process.call sftp, root, entry, pattern
-                    }
-                  else
-                    entry = sftp.dir.glob( root, pattern +"*" ).sort_by{|f| f.attributes.mtime}.last
-                    process.call sftp, root, entry, pattern
-                  end
-
-
-                rescue
-                  error_found = true
-                  error_output << "[#{Time.now.strftime('%H:%M:%S')}] Failed to get file(#{retry_idx+1}): #{$!.message}"
-                  @logger.warn { "Failed to get file(#{retry_idx+1}). #{$!.message}. Skipping this pattern..." }
-                  next
-
-                end
-            }
-
+            end
+          }
 
         } ; @logger.debug { "Closed connection" }
         if error_found and retry_idx < max_retries
@@ -79,51 +74,34 @@ module SftpExtractor
         break # On success breaks the main loop
       }
 
+      cleanup_folder_moving_to_done
 
-      ########
-
-      res = Net::SFTP.start(@options[:credentials]['server'], @options[:credentials]['user'], sftp_connect_options){ |sftp|
-        cleanup_folder_moving_to_done(sftp, root)
-      } ; @logger.debug { 'Closed connection' }
-
-
-      if(@patterns_processed.empty?)
+      if @patterns_processed.empty?
         raise Cel::SftpExtractor::NoFilesProcessedException
       end
 
     ensure
 
-      if error_found and @options[:retry_on_error]['mail_config']['to']
-        subject= @options[:retry_on_error]['mail_config']['subject']
+      if error_found
+        if @options[:retry_on_error]['mail_config']['to']
+          subject = get_email_subject(@options[:retry_on_error]['mail_config']['subject'], @options[:env])
+          body = @options[:retry_on_error]['mail_config']['body']  + "<br/><br/>"
 
-        if @options[:env] != 'production'
-          env = {'development' => 'DEV'}[@options[:env] ]
-          env ||= @options[:env]
-          subject << " @ #{env}"
-        end
+          error_output.each{ |err| body += err + "<br/>"   }
 
-        body = @options[:retry_on_error]['mail_config']['body']  + "<br/><br/>"
+          patterns_failed = (@options[:folder]['in']['patterns'] - @patterns_processed)
+          if patterns_failed.size > 0
+            body += "<br/><br/>The following files were not received:<ul>"
+            patterns_failed.each{|pattern| body += "<li>#{pattern}</li>"}
+            body += "</ul>"
+          end
 
-        error_output.each{ |err| body += err + "<br/>"   }
-
-        patterns_failed = (@options[:folder]['in']['patterns'] - @patterns_processed)
-        if patterns_failed.size > 0
-          body += "<br/><br/>The following files were not received:<ul>"
-          patterns_failed.each{|pattern| body += "<li>#{pattern}</li>"}
-          body += "</ul>"
-        end
-
-        unless @options[:retry_on_error]['mail_config']['to'].is_a? Array
-          @logger.warn { "Deprecated mail_to format. Change to a Array of emails in the config file" }
-          # sendmail(@options[:retry_on_error]['mail_config']['to'].split(',').map{|e| e.strip}, subject, body, "text/html")
-          @logger.info { "Email sent to #{@options[:retry_on_error]['mail_config']['to']}" }
-        else
           # sendmail(@options[:retry_on_error]['mail_config']['to'], subject, body, "text/html")
           @logger.info { "Email sent to #{@options[:retry_on_error]['mail_config']['to'].join(', ')}" }
-        end
 
-      else
-        @logger.info { "Not sending email because 'to' field is empty" } if error_found
+        else
+          @logger.info { "Not sending email because 'to' field is empty" }
+        end
       end
 
     end
@@ -203,6 +181,14 @@ module SftpExtractor
         }
       end
       # --  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - --
+      def sftp_credentials
+        @sftp_credentials ||= [@options[:credentials]['server'], @options[:credentials]['user'], sftp_connect_options]
+      end
+      # --  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - --
+      def get_files_ordered_by_date(sftp, pattern)
+        sftp.dir.glob( root, pattern +"*" ).sort_by{|f| f.attributes.mtime}
+      end
+      # --  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - --
       #  if @options[:folder]['in']['root'] was not specified
       #  it's assumed @options[:root] as the place where the files should be
       def root
@@ -213,28 +199,36 @@ module SftpExtractor
         end
       end
       # --  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - --
-      def cleanup_folder_moving_to_done(sftp, root)
-        if @options[:folder]['on_success'].has_key?('move_to')
-          move_files_to_done(sftp, root)
-        else
-          @logger.warn { "Not moving files because @options[:folder]['on_success']['move_to'] not defined" }
-        end
-
-        if @options[:folder]['on_success'].has_key?('cleanup')
-          nr_files = cleanup_old_files(sftp, root, @options[:folder]['on_success']['cleanup'])
-          @logger.info { "#{nr_files} files were deleted" }
-        else
-          @logger.warn { "If you need to set a cleanup period, fill folder['on_success']['cleanup']" }
-        end
-      end
-      # --  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - --
-      def cleanup_old_files(sftp, root)
-        remove_files_older_than = @cleanup_period.ago.to_i
-        success_path = if @options[:folder]['on_success'].has_key?('move_to')
+      def success_path
+        @success_path ||= if @options[:folder]['on_success'].has_key?('move_to')
           File.join( @options[:root], @options[:folder]['on_success']['move_to'])
         else
           @options[:root]
         end
+      end
+      # --  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - --
+      def cleanup_folder_moving_to_done
+        res = Net::SFTP.start( *sftp_credentials ){ |sftp|
+
+          if @options[:folder]['on_success'].has_key?('move_to')
+            move_files_to_done(sftp, root)
+          else
+            @logger.warn { "Not moving files because @options[:folder]['on_success']['move_to'] not defined" }
+          end
+
+          if @options[:folder]['on_success'].has_key?('cleanup')
+            nr_files = cleanup_old_files(sftp, root)
+            @logger.info { "#{nr_files} files were deleted" }
+          else
+            @logger.warn { "If you need to set a cleanup period, fill folder['on_success']['cleanup']" }
+          end
+
+        }
+        @logger.debug { 'Closed connection' }
+      end
+      # --  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - --
+      def cleanup_old_files(sftp, root)
+        remove_files_older_than = @cleanup_period.ago.to_i
 
         begin
           old_files = sftp.dir.entries( success_path ).reject{|f| ['.', '..'].include? f.name}
@@ -269,35 +263,36 @@ module SftpExtractor
           return nil
         end
 
-        return nil unless old_files.size > 0
+        if old_files.any?
+          @logger.info { "Going to move #{old_files.size} older files, or with a different pattern" }
 
-        @logger.info { "Going to move #{old_files.size} older files, or with a different pattern" }
+          old_files.each { |old_file|
 
-        old_files.each { |old_file|
+            if old_file.directory?
+              @logger.debug { "Skipping to move '#{old_file.name}' because is a directory" }
+              next
+            end
 
-          if old_file.directory?
-            @logger.debug { "Skipping to move '#{old_file.name}' because is a directory" }
-            next
-          end
+            begin
+              sftp.rename!(
+                File.join( root, old_file.name),
+                File.join( File.join( @options[:root], @options[:folder]['on_success']['move_to'], old_file.name) )
+              )
+            rescue Net::SFTP::StatusException => e
+              # @logger.debug { "Failed to move #{old_file.name}. Going to remove the oldest" }
+              @logger.debug { "Failed to move #{old_file.name}" }
 
-          begin
-            sftp.rename!(
-              File.join( root, old_file.name),
-              File.join( File.join( @options[:root], @options[:folder]['on_success']['move_to'], old_file.name) )
-            )
-          rescue Net::SFTP::StatusException => e
-            @logger.debug { "Failed to move #{old_file.name}. Going to remove the eldest" }
+              # sftp.remove( File.join( @options[:root], @options[:folder]['on_success']['move_to'], old_file.name) )
 
-            sftp.remove( File.join( @options[:root], @options[:folder]['on_success']['move_to'], old_file.name) )
-
-            # mover o ficheiro que existe na pasta PROCESSAR para PROCESSADOS
-            sftp.rename(
-              File.join( root, old_file.name ),
-              File.join( File.join( @options[:root], @options[:folder]['on_success']['move_to'], old_file.name) )
-            )
-          end
-        }
-      end
+              # # mover o ficheiro que existe na pasta PROCESSAR para PROCESSADOS
+              # sftp.rename(
+              #   File.join( root, old_file.name ),
+              #   File.join( File.join( @options[:root], @options[:folder]['on_success']['move_to'], old_file.name) )
+              # )
+            end
+          }
+        end # if empty
+      end # move_files_to_done
 
   end   # class SftpExtractor
 end   # module SftpExtractor

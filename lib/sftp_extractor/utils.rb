@@ -51,6 +51,15 @@ def time_parse_us_format date_str
   Time.local($3.to_i, months[$2.to_i - 1], $1.to_i, $4.to_i, $5.to_i, $6.to_i)
 end
 
+def get_email_subject(subject, env)
+  if env != 'production'
+    env_short = {'development' => 'DEV'}[ env ]
+    env_short ||= env
+    subject << " @ #{env_short}"
+  end
+  subject
+end
+
 # @input: '2 minutes'
 # @output: 120
 # 
