@@ -1,4 +1,4 @@
-# require 'config'
+require 'active_support/core_ext/numeric/time'
 
 def save_log_to_file(error_output, filename)
 	if !error_output.empty?
@@ -49,6 +49,15 @@ def time_parse_us_format date_str
     'jul','aug','sep','oct','nov','dec']
   date_str =~ /(\d{2})-(\d{1,2})-(\d{4}) (\d+):(\d\d):(\d\d)/
   Time.local($3.to_i, months[$2.to_i - 1], $1.to_i, $4.to_i, $5.to_i, $6.to_i)
+end
+
+# @input: '2 minutes'
+# @output: 120
+# 
+# @input: 120
+# @output: 120
+def time_to_secs(time)
+  eval(time.to_s.gsub(' ', '.')).to_i
 end
 
 def get_log_filename(dir_path, only_today=true)

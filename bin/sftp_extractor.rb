@@ -1,5 +1,5 @@
 require 'optparse'
-require 'utils'
+require 'sftp_extractor/utils'
 
 # We set default values here.
 config_file = 'conf/default_config.yml'
@@ -48,15 +48,14 @@ args = {
 
 
 # -------------
-require './lib/sftp_extractor'
-require './lib/sftp_extractor_exceptions'
+require 'sftp_extractor'
 
 cfg_file = config_file.split('.')[0].split('/').last
 
 unless is_process_running?( $project_name, environment, cfg_file )
   begin
     process_running_pid( $project_name, environment, cfg_file )
-    sleep 7
+    sleep 2
     runner = SftpExtractor::SftpExtractor.new(args)
     runner.run
   rescue SftpExtractor::NoFilesProcessedException => e

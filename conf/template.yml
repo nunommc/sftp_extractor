@@ -1,0 +1,28 @@
+default: &common
+  root: fake_folder
+  folder:
+    in: { root: PENDING, patterns: [FILE_PATTERN] }
+    on_success:
+      move_to: PROCESSED
+      cleanup: 5 days
+    local_out: incoming/template
+  logger:
+    path: /tmp/template_sftp.log
+    level: debug
+  retry_on_error: &retry
+    max_times: 2
+    period: 20 minutes
+    mail_config:
+      to:
+        - nuno.mmc@gmail.com
+      subject: Extraction from SFTP failed (<details here>)
+      body: "Execution Log:"
+
+development:
+  <<: *common
+
+qa:
+  <<: *common
+
+production:
+  <<: *common
