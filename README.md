@@ -1,5 +1,22 @@
 # SftpExtractor
 
+This gem allows you to setup regular extractions from a SFTP server.
+It's expected that the server you're connecting to has file structure like shown below and that your user has privileges to copy and delete files from it's home directory:
+
+    <USER'S DEFAULT DIR>
+    `-- some_folder
+        |-- PENDING
+        |   |-- 2014_09_24_customers.csv
+        |   `-- 2014_09_25_customers.csv
+        `-- PROCESSED
+            |-- ...
+            |-- 2014_09_20_customers.csv
+            |-- 2014_09_21_customers.csv
+            |-- 2014_09_22_customers.csv
+            `-- 2014_09_23_customers.csv
+
+It's suggested you use the commands as shown [here](#2-usage) to setup your crontab or [whenever](https://github.com/javan/whenever) gem.
+
 ## 1) Installation
 
 Add this line to your application's Gemfile:
@@ -43,8 +60,6 @@ ruby bin/sftp_extractor.rb -c conf/template.yml -e development
 
 ## 3) Settings
 
-__TO BE TRANSLATED__
-
 
 | *key*       |             | *description* | *optional* |
 | ----------- | ----------- | ------------- | :--------: |
@@ -72,7 +87,7 @@ production:
     timeout: 20
   root: "."
   folder:
-    in: { patterns: ["*customers.csv"] }
+    in: { root: PENDING, patterns: ["*customers.csv"] }
     local_out: incoming/campaign
     on_success:
       move_to: PROCESSED
