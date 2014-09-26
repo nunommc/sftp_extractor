@@ -1,29 +1,27 @@
 require 'net/sftp'
 require 'sftp_extractor/net-sftp-patch'
-# require 'active_support/core_ext'
 require 'active_support/core_ext/array/conversions'
 
 # http://net-ssh.github.com/sftp/v2/api/index.html
 
 module SftpExtractor
-  class SftpExtractor
+  class Downloader
 
     def initialize args={}
       @options	  = args.dup
 
-      @logger     = init_logger('cel_sftp_extractor', @options[:logger]['level'], @options[:logger]['path'])
-      @logger.debug "configs: #{@options.inspect}"
-      @patterns_processed = [] # empty list
+      @logger     = init_logger('sftp_extractor', @options[:logger]['level'], @options[:logger]['path'])
+      @logger.debug { "configs: #{@options.inspect}" }
+      @patterns_processed = []
 
       validate_configurations!
     end
     # --  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - --
     def run
       @logger.info { 'Starting...' }
-      error_found  = false
-      error_output = []
+      @errors_found  = false
+      @error_output  = []
 
-      # TODO: substituir por retry (pckg bin/utils)
       max_retries = @options[:retry_on_error]['max_times'] || 0
 
       process_entry = Proc.new do |sftp, root, entry, pattern|
@@ -36,7 +34,7 @@ module SftpExtractor
       end
 
       (0..max_retries).each{ |retry_idx|
-        error_found = false
+        @errors_found = false
 
         @logger.info { "Getting Files from SFTP server @ #{@options[:credentials]['server']}" }
 
@@ -55,8 +53,8 @@ module SftpExtractor
               end
 
             rescue
-              error_found = true
-              error_output << "[#{Time.now.strftime('%H:%M:%S')}] Failed to get file(#{retry_idx+1}): #{$!.message}"
+              @errors_found = true
+              @error_output << "[#{Time.now.strftime('%H:%M:%S')}] Failed to get file(#{retry_idx+1}): #{$!.message}"
               @logger.warn { "Failed to get file(#{retry_idx+1}). #{$!.message}. Skipping this pattern..." }
               next
 
@@ -64,48 +62,35 @@ module SftpExtractor
           }
 
         } ; @logger.debug { "Closed connection" }
-        if error_found and retry_idx < max_retries
-
-          @logger.info { "Will retry in #{@options[:retry_on_error]['period'].to_i.to_s}" }
-          sleep( time_to_secs(@options[:retry_on_error]['period']) )
-          next
+        
+        if @errors_found
+          if retry_idx < max_retries
+            @logger.info { "Will retry in #{@options[:retry_on_error]['period'].to_i.to_s}" }
+            sleep( time_to_secs(@options[:retry_on_error]['period']) )
+            next
+          else
+            break # On success breaks the main loop
+          end
         end
 
-        break # On success breaks the main loop
       }
 
-      cleanup_folder_moving_to_done
+      cleanup_folder_moving_to_done()
 
       if @patterns_processed.empty?
-        raise Cel::SftpExtractor::NoFilesProcessedException
+        raise SftpExtractor::NoFilesProcessedException
       end
 
     ensure
-
-      if error_found
-        if @options[:retry_on_error]['mail_config']['to']
-          subject = get_email_subject(@options[:retry_on_error]['mail_config']['subject'], @options[:env])
-          body = @options[:retry_on_error]['mail_config']['body']  + "<br/><br/>"
-
-          error_output.each{ |err| body += err + "<br/>"   }
-
-          patterns_failed = (@options[:folder]['in']['patterns'] - @patterns_processed)
-          if patterns_failed.size > 0
-            body += "<br/><br/>The following files were not received:<ul>"
-            patterns_failed.each{|pattern| body += "<li>#{pattern}</li>"}
-            body += "</ul>"
-          end
-
-          # sendmail(@options[:retry_on_error]['mail_config']['to'], subject, body, "text/html")
-          @logger.info { "Email sent to #{@options[:retry_on_error]['mail_config']['to'].join(', ')}" }
-
-        else
-          @logger.info { "Not sending email because 'to' field is empty" }
-        end
+      if @errors_found
+        mail_config = @options[:retry_on_error]['mail_config']
+        send_email_with_error_log(
+          mailto:   mail_config['to'],
+          subject:  get_email_subject(mail_config['subject'], @options[:env]),
+          body:     mail_config['body']
+        )
       end
-
     end
-
 
 
     private
@@ -121,7 +106,7 @@ module SftpExtractor
           end
         }
       end
-
+      # --  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - --
       def validate_configurations!
         validate_credentials(@options[:credentials])
 
@@ -149,6 +134,26 @@ module SftpExtractor
 
         unless @options.has_key?(:root)
           raise ArgumentError, "Please fill all the :root"
+        end
+      end
+      # --  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - --
+      def send_email_with_error_log(mailto: [], subject: 'Errors Log', body: '')
+        if mailto
+          body << "<BR/><BR/>" unless body.empty?
+          body << @error_output.join("<BR/>")
+
+          patterns_failed = (@options[:folder]['in']['patterns'] - @patterns_processed)
+          if patterns_failed.size > 0
+            body << "<BR/><BR/>The following files were not received:<ul>"
+            body << patterns_failed.map{|pattern| "<li>#{pattern}</li>"}.join
+            body << "</ul>"
+          end
+
+          # sendmail(mailto, subject, body, "text/html")
+          # @logger.info { "Email sent to #{mailto.join(', ')}" }
+
+        else
+          @logger.info { "Not sending email because 'to' field is empty" }
         end
       end
       # --  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - --

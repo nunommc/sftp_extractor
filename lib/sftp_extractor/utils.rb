@@ -18,7 +18,7 @@ def save_log_to_file(error_output, filename)
 
 		host = `hostname`.chop
 		
-		system "uuencode #{filename}.zip #{filename}.zip | mail -s '[SFA-SIREL@#{host}] *** ERRO ***' #{RECIPIENTS_IN_CASE_OF_ERROR.join ' '}" if !RECIPIENTS_IN_CASE_OF_ERROR.empty?
+		system "uuencode #{filename}.zip #{filename}.zip | mail -s '*** ERROR ***' #{RECIPIENTS_IN_CASE_OF_ERROR.join(' ')}" if defined?(RECIPIENTS_IN_CASE_OF_ERROR) && !RECIPIENTS_IN_CASE_OF_ERROR.empty?
 		begin
 			File.delete("#{filename}.zip")
 		rescue

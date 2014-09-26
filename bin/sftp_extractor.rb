@@ -56,7 +56,7 @@ unless is_process_running?( $project_name, environment, cfg_file )
   begin
     process_running_pid( $project_name, environment, cfg_file )
     sleep 2
-    runner = SftpExtractor::SftpExtractor.new(args)
+    runner = SftpExtractor::Downloader.new(args)
     runner.run
   rescue SftpExtractor::NoFilesProcessedException => e
     exit(-1)
